@@ -142,27 +142,6 @@ docker compose --profile external up -d     # Start
 
 ---
 
-## Development
-
-### Prerequisites
-
-- Node.js 20+
-- npm
-
-### Setup
-
-```bash
-cd app
-npm install
-npx prisma generate
-npx prisma migrate dev
-npm run dev
-```
-
-Open http://localhost:3000
-
----
-
 ## How It Works
 
 1. **Discovery**: SpoolmanSync connects to Home Assistant and discovers Bambu Lab printers via the ha-bambulab integration entities.
