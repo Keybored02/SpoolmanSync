@@ -57,9 +57,6 @@ COPY --from=builder /app/src/generated ./src/generated
 # This ensures all transitive dependencies are available for migrations
 COPY --from=deps /app/node_modules ./node_modules
 
-# Overwrite with generated Prisma client from builder
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-
 # Copy entrypoint script
 COPY --chown=nextjs:nodejs entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
