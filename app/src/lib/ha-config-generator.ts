@@ -185,7 +185,7 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                         filament_tag_uid: "{{ tag_uid }}"
                         filament_used_weight: "{{ tray_weight }}"
                         filament_color: "{{ color }}"
-                        filament_active_tray_id: "{{ tray_sensor | replace('sensor.', '') }}"
+                        filament_active_tray_id: "{{ tray_sensor }}"
                     - action: utility_meter.calibrate
                       target:
                         entity_id: sensor.spoolmansync_filament_usage_meter
@@ -241,7 +241,7 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                         filament_tag_uid: "{{ tag_uid }}"
                         filament_used_weight: "{{ tray_weight }}"
                         filament_color: "{{ color }}"
-                        filament_active_tray_id: "{{ tray_sensor | replace('sensor.', '') }}"
+                        filament_active_tray_id: "{{ tray_sensor }}"
               default:
                 - action: system_log.write
                   data:
@@ -325,7 +325,7 @@ rest_command:
         "name": "{{ filament_name }}",
         "material": "{{ filament_material }}",
         "tag_uid": "{{ filament_tag_uid }}",
-        "used_weight": {{ filament_used_weight | int }},
+        "used_weight": {{ filament_used_weight | round(2) }},
         "color": "{{ filament_color }}",
         "active_tray_id": "{{ filament_active_tray_id }}"
       }

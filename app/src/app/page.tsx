@@ -91,6 +91,56 @@ export default function Dashboard() {
     fetchData();
   }, [fetchData]);
 
+  // Subscribe to real-time updates via Server-Sent Events
+  useEffect(() => {
+    // Only connect if both services are configured
+    if (!settings?.homeassistant || !settings?.spoolman) {
+      return;
+    }
+
+    let eventSource: EventSource | null = null;
+    let reconnectTimeout: NodeJS.Timeout | null = null;
+
+    const connect = () => {
+      eventSource = new EventSource('/api/events');
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          // Skip heartbeat and connection messages
+          if (data.type === 'heartbeat' || data.type === 'connected') {
+            return;
+          }
+
+          // Refresh data when spool is updated
+          if (data.type === 'usage') {
+            console.log('Spool update received:', data);
+            toast.info(`Filament used: ${data.deducted}g from ${data.spoolName || 'spool'}`);
+            fetchData();
+          }
+        } catch (err) {
+          console.error('Error parsing SSE message:', err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        // Connection lost, attempt to reconnect after 5 seconds
+        eventSource?.close();
+        reconnectTimeout = setTimeout(connect, 5000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      eventSource?.close();
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+    };
+  }, [settings?.homeassistant, settings?.spoolman, fetchData]);
+
   const handleSpoolAssign = async (trayId: string, spoolId: number) => {
     try {
       const res = await fetch('/api/spools', {

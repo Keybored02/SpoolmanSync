@@ -1,0 +1,51 @@
+/**
+ * Simple event emitter for server-side events
+ * Used to broadcast spool updates to connected SSE clients
+ */
+
+type EventCallback = (data: unknown) => void;
+
+class EventEmitter {
+  private listeners: Map<string, Set<EventCallback>> = new Map();
+
+  on(event: string, callback: EventCallback): () => void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(callback);
+
+    // Return unsubscribe function
+    return () => {
+      this.listeners.get(event)?.delete(callback);
+    };
+  }
+
+  emit(event: string, data: unknown): void {
+    const callbacks = this.listeners.get(event);
+    if (callbacks) {
+      for (const callback of callbacks) {
+        try {
+          callback(data);
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error);
+        }
+      }
+    }
+  }
+}
+
+// Singleton instance for app-wide event broadcasting
+export const spoolEvents = new EventEmitter();
+
+// Event types
+export const SPOOL_UPDATED = 'spool_updated';
+
+export interface SpoolUpdateEvent {
+  type: 'usage' | 'assignment' | 'unassignment';
+  spoolId: number;
+  spoolName?: string;
+  deducted?: number;
+  newWeight?: number;
+  trayId?: string;
+  timestamp: number;
+}
