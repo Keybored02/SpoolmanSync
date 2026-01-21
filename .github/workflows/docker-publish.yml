@@ -1,0 +1,70 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'  # Allow testing on ci/ branches
+
+env:
+  REGISTRY_GITHUB: ghcr.io
+  REGISTRY_DOCKERHUB: docker.io
+  IMAGE_NAME_APP: spoolmansync
+  IMAGE_NAME_HA: spoolmansync-homeassistant
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login to registries (only needed for push, but doing it early to fail fast)
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_GITHUB }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_DOCKERHUB }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build and push main app image
+      - name: Build and push SpoolmanSync app
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.REGISTRY_GITHUB }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME_APP }}:latest
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME_APP }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Build and push Home Assistant image
+      - name: Build and push SpoolmanSync Home Assistant
+        uses: docker/build-push-action@v6
+        with:
+          context: ./homeassistant
+          file: ./homeassistant/Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.REGISTRY_GITHUB }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME_HA }}:latest
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME_HA }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

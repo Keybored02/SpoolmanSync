@@ -1,0 +1,69 @@
+# SpoolmanSync - Pre-built Docker Images
+#
+# This compose file uses pre-built images from GitHub Container Registry.
+# For users who prefer Docker Hub, replace ghcr.io/gibz104 with docker.io/gibz104
+#
+# Choose a profile based on your setup:
+#
+#   Embedded Home Assistant (recommended for most users):
+#     docker compose -f docker-compose.prebuilt.yml --profile embedded up -d
+#
+#   External Home Assistant (if you already have HA with ha-bambulab):
+#     docker compose -f docker-compose.prebuilt.yml --profile external up -d
+#
+
+# Shared app configuration
+x-app-common: &app-common
+  image: ghcr.io/gibz104/spoolmansync:latest
+  container_name: spoolmansync-app
+  ports:
+    - "3000:3000"
+  volumes:
+    - app-data:/data
+  restart: unless-stopped
+  networks:
+    - spoolmansync
+
+services:
+  # External Home Assistant mode
+  # Use this if you already have Home Assistant with ha-bambulab configured
+  app:
+    <<: *app-common
+    profiles: ["external"]
+    environment:
+      - HA_MODE=external
+
+  # Embedded Home Assistant mode (recommended)
+  # Includes a bundled Home Assistant pre-configured with HACS and ha-bambulab
+  app-embedded:
+    <<: *app-common
+    profiles: ["embedded"]
+    environment:
+      - HA_MODE=embedded
+    volumes:
+      - app-data:/data
+      - homeassistant-data:/ha-config
+    depends_on:
+      - homeassistant
+
+  # Bundled Home Assistant - only runs with embedded profile
+  homeassistant:
+    profiles: ["embedded"]
+    image: ghcr.io/gibz104/spoolmansync-homeassistant:latest
+    container_name: spoolmansync-homeassistant
+    ports:
+      - "8123:8123"
+    volumes:
+      - homeassistant-data:/config
+    restart: unless-stopped
+    networks:
+      - spoolmansync
+    privileged: true
+
+volumes:
+  app-data:
+  homeassistant-data:
+
+networks:
+  spoolmansync:
+    driver: bridge

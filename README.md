@@ -1,5 +1,7 @@
 # SpoolmanSync
 
+![Build Status](https://github.com/gibz104/SpoolmanSync/actions/workflows/docker-publish.yml/badge.svg)
+
 Sync Bambu Lab AMS trays with [Spoolman](https://github.com/Donkie/Spoolman) via Home Assistant.
 
 SpoolmanSync automatically tracks which filament spools are loaded in your Bambu Lab printer's AMS units and syncs this information with Spoolman for accurate filament inventory management.
@@ -14,13 +16,34 @@ SpoolmanSync automatically tracks which filament spools are loaded in your Bambu
 - **Webhook Integration** - Receives tray change events from Home Assistant automations
 - **Activity Logging** - Track all spool changes and sync events
 
-## Quick Start
+## Quick Install (Pre-built Images)
+
+The fastest way to get started using pre-built Docker images:
+
+```bash
+# Download the compose file
+curl -O https://raw.githubusercontent.com/gibz104/SpoolmanSync/main/docker-compose.prebuilt.yml
+
+# Start with embedded Home Assistant (recommended for most users)
+docker compose -f docker-compose.prebuilt.yml --profile embedded up -d
+
+# Or, if you already have Home Assistant with ha-bambulab
+docker compose -f docker-compose.prebuilt.yml --profile external up -d
+```
+
+Then open http://localhost:3000 and follow the setup steps below.
+
+---
+
+## Building from Source
+
+If you prefer to build locally or want to contribute:
 
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/spoolman-updater.git
-cd spoolman-updater
+git clone https://github.com/gibz104/SpoolmanSync.git
+cd SpoolmanSync
 ```
 
 ### 2. Choose Your Mode
