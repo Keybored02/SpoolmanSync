@@ -163,12 +163,16 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
             - condition: template
               value_template: "{{ trigger.id == 'tray' }}"
           sequence:
-            # Log usage from OLD tray only if it was valid and we have weight
-            # old_tray >= 0 allows external spool (0) and AMS trays (1-4)
+            # Log usage from OLD tray only if:
+            # 1. old_tray was valid (>= 0 allows external spool and AMS trays)
+            # 2. we have weight to log (>= 0.01g)
+            # 3. printer was actually printing (not just a spool swap while idle)
             - choose:
                 - conditions:
                     - condition: template
-                      value_template: "{{ old_tray >= 0 and tray_weight >= 0.01 }}"
+                      value_template: >-
+                        {{ old_tray >= 0 and tray_weight >= 0.01 and
+                           states('sensor.${prefix}_current_stage') in ['printing', 'prepare', 'pause'] }}
                   sequence:
                     - action: system_log.write
                       data:
@@ -196,8 +200,15 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                   data:
                     message: >-
                       SPOOLMANSYNC TRAY CHANGE (no usage logged) | Old: {{ old_tray }} -> New: {{ new_tray }} |
-                      Weight: {{ tray_weight }}g | Reason: {{ 'old_tray invalid' if old_tray < 0 else 'no weight' }}
+                      Weight: {{ tray_weight }}g | Stage: {{ states('sensor.${prefix}_current_stage') }} |
+                      Reason: {{ 'old_tray invalid' if old_tray < 0 else ('not printing' if states('sensor.${prefix}_current_stage') not in ['printing', 'prepare', 'pause'] else 'no weight') }}
                     level: debug
+                # Reset meter anyway to prevent stale values from accumulating
+                - action: utility_meter.calibrate
+                  target:
+                    entity_id: sensor.spoolmansync_filament_usage_meter
+                  data:
+                    value: "0"
             # ALWAYS update helper to new tray (0 = external spool, 1-4 = AMS)
             - condition: template
               value_template: "{{ new_tray >= 0 }}"
