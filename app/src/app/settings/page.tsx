@@ -295,26 +295,26 @@ function SettingsContent() {
                           </div>
 
                           <div className="grid gap-2">
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2">
                               <span className="text-sm text-muted-foreground">Username:</span>
                               <div className="flex items-center gap-2">
-                                <code className="px-2 py-1 bg-background rounded text-sm">
+                                <code className="px-2 py-1 bg-background rounded text-sm truncate max-w-[150px] sm:max-w-none">
                                   {settings.homeassistant.adminCredentials.username}
                                 </code>
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 px-2"
+                                  className="h-7 px-2 shrink-0"
                                   onClick={() => copyToClipboard(settings.homeassistant!.adminCredentials!.username, 'Username')}
                                 >
                                   Copy
                                 </Button>
                               </div>
                             </div>
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2">
                               <span className="text-sm text-muted-foreground">Password:</span>
                               <div className="flex items-center gap-2">
-                                <code className="px-2 py-1 bg-background rounded text-sm font-mono">
+                                <code className="px-2 py-1 bg-background rounded text-sm font-mono truncate max-w-[150px] sm:max-w-none">
                                   {showPassword
                                     ? settings.homeassistant.adminCredentials.password
                                     : '••••••••••••'}
@@ -322,7 +322,7 @@ function SettingsContent() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 px-2"
+                                  className="h-7 px-2 shrink-0"
                                   onClick={() => setShowPassword(!showPassword)}
                                 >
                                   {showPassword ? 'Hide' : 'Show'}
@@ -330,7 +330,7 @@ function SettingsContent() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 px-2"
+                                  className="h-7 px-2 shrink-0"
                                   onClick={() => copyToClipboard(settings.homeassistant!.adminCredentials!.password, 'Password')}
                                 >
                                   Copy

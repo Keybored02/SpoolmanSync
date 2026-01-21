@@ -264,9 +264,9 @@ function ScanPageContent() {
             {trays.length > 0 && (
               <div className="space-y-2 pt-4 border-t">
                 <Label>Assign to Tray</Label>
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <Select value={selectedTray} onValueChange={setSelectedTray}>
-                    <SelectTrigger className="flex-1">
+                    <SelectTrigger className="w-full sm:flex-1 min-w-0">
                       <SelectValue placeholder="Select a tray" />
                     </SelectTrigger>
                     <SelectContent>
@@ -280,6 +280,7 @@ function ScanPageContent() {
                   <Button
                     onClick={handleAssign}
                     disabled={loading || !selectedTray}
+                    className="w-full sm:w-auto"
                   >
                     {loading ? 'Assigning...' : 'Assign'}
                   </Button>

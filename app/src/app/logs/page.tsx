@@ -91,13 +91,18 @@ export default function LogsPage() {
                 {logs.map((log) => (
                   <div
                     key={log.id}
-                    className="flex items-start gap-4 border-b pb-3 last:border-0 last:pb-0"
+                    className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4 border-b pb-3 last:border-0 last:pb-0"
                   >
-                    <Badge variant={getTypeBadgeVariant(log.type)}>
-                      {log.type}
-                    </Badge>
+                    <div className="flex items-center justify-between sm:contents">
+                      <Badge variant={getTypeBadgeVariant(log.type)} className="shrink-0">
+                        {log.type}
+                      </Badge>
+                      <time className="text-xs text-muted-foreground whitespace-nowrap sm:order-last">
+                        {formatDate(log.createdAt)}
+                      </time>
+                    </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm">{log.message}</p>
+                      <p className="text-sm break-words">{log.message}</p>
                       {log.details && (
                         <details className="mt-1">
                           <summary className="text-xs text-muted-foreground cursor-pointer">
@@ -109,9 +114,6 @@ export default function LogsPage() {
                         </details>
                       )}
                     </div>
-                    <time className="text-xs text-muted-foreground whitespace-nowrap">
-                      {formatDate(log.createdAt)}
-                    </time>
                   </div>
                 ))}
               </div>
