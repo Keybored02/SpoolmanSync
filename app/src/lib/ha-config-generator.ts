@@ -280,10 +280,17 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
  */
 function generateConfigurationAdditions(prefix: string, traySuffix: string, spoolmanUrl: string, externalSpoolEntityId: string | null): string {
   // Build the active tray detection logic - handles both AMS trays and external spool
+  // Note: We check that external spool has a configured filament (name != "Empty") to prevent
+  // false positives during AMS transitions. The printer briefly reports external spool as "active"
+  // during filament runout/switch events, but with name="Empty" since nothing is configured there.
+  // Real external spool usage requires configuration in Bambu Studio first, which sets a real name.
   const externalSpoolCheck = externalSpoolEntityId
     ? `
-          {# Check external spool first (tray 0) #}
-          {% if state_attr('${externalSpoolEntityId}', 'active') in [true, 'true', 'True'] %}
+          {# Check external spool first (tray 0) - only if it has configured filament #}
+          {# Ignore empty external spool to prevent false positives during AMS transitions #}
+          {% set ext_name = state_attr('${externalSpoolEntityId}', 'name') | default('') | string | lower | trim %}
+          {% if state_attr('${externalSpoolEntityId}', 'active') in [true, 'true', 'True']
+             and ext_name not in ['empty', '', 'unknown'] %}
             0
           {% else %}`
     : '';
