@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { HomeAssistantClient, isEmbeddedMode, getEmbeddedHAUrl } from '@/lib/api/homeassistant';
 import { generateHAConfig, mergeConfiguration } from '@/lib/ha-config-generator';
+import { createActivityLog } from '@/lib/activity-log';
 import * as fs from 'fs/promises';
 
 
@@ -86,12 +87,10 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      await prisma.activityLog.create({
-        data: {
-          type: 'automation_created',
-          message: `Registered ${trayIds.length} automations`,
-          details: JSON.stringify({ trayIds }),
-        },
+      await createActivityLog({
+        type: 'automation_created',
+        message: `Registered ${trayIds.length} automations`,
+        details: { trayIds },
       });
 
       return NextResponse.json({ success: true, count: trayIds.length });
@@ -206,12 +205,10 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        await prisma.activityLog.create({
-          data: {
-            type: 'automation_created',
-            message: `Auto-configured SpoolmanSync for ${config.printerCount} printer(s), ${config.trayCount} tray(s)`,
-            details: JSON.stringify({ printers: printers.map(p => p.name), trayIds }),
-          },
+        await createActivityLog({
+          type: 'automation_created',
+          message: `Auto-configured SpoolmanSync for ${config.printerCount} printer(s), ${config.trayCount} tray(s)`,
+          details: { printers: printers.map(p => p.name), trayIds },
         });
 
         return NextResponse.json({
