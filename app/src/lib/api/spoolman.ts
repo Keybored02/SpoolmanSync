@@ -116,16 +116,27 @@ export class SpoolmanClient {
     // First, unassign any spool currently in this tray
     const currentSpools = await this.getSpoolsByTray(trayId);
     for (const spool of currentSpools) {
-      await this.unassignSpoolFromTray(spool.id);
+      if (spool.id !== spoolId) {
+        await this.unassignSpoolFromTray(spool.id);
+      }
     }
+
+    // Get current spool to preserve other extra fields (like tag)
+    // Spoolman's PATCH replaces the entire extra object
+    const spool = await this.getSpool(spoolId);
+    const newExtra: Record<string, string> = {};
+    if (spool.extra) {
+      for (const [key, value] of Object.entries(spool.extra)) {
+        newExtra[key] = value;
+      }
+    }
+    newExtra['active_tray'] = JSON.stringify(trayId);
 
     // Assign the new spool
     return this.fetch(`/spool/${spoolId}`, {
       method: 'PATCH',
       body: JSON.stringify({
-        extra: {
-          active_tray: JSON.stringify(trayId),
-        },
+        extra: newExtra,
       }),
     });
   }
@@ -152,20 +163,142 @@ export class SpoolmanClient {
     // Spoolman requires extra field values to be valid JSON
     newExtra['active_tray'] = JSON.stringify('');
 
-    console.log(`[SpoolmanSync] Unassigning spool ${spoolId}`);
-    console.log(`[SpoolmanSync] Current extra: ${JSON.stringify(spool.extra)}`);
-    console.log(`[SpoolmanSync] New extra (with empty active_tray): ${JSON.stringify(newExtra)}`);
-
     // Send the updated extra object with empty active_tray
-    const updatedSpool = await this.fetch<Spool>(`/spool/${spoolId}`, {
+    return this.fetch<Spool>(`/spool/${spoolId}`, {
       method: 'PATCH',
       body: JSON.stringify({
         extra: newExtra,
       }),
     });
+  }
 
-    console.log(`[SpoolmanSync] Response extra after PATCH: ${JSON.stringify(updatedSpool.extra)}`);
-    return updatedSpool;
+  /**
+   * Store a Bambu RFID tag UID on a spool
+   * Supports multiple tags (comma-separated) to handle Bambu firmware bug where
+   * the same spool reports different tag_uids based on tray position.
+   * Also clears the tag from any other spools that have it (since each RFID is unique)
+   */
+  async setSpoolTag(spoolId: number, tagUid: string): Promise<Spool> {
+    // First, clear this tag from any other spools that have it
+    await this.clearDuplicateTags(tagUid, spoolId);
+
+    // Get current spool to preserve other extra fields
+    const spool = await this.getSpool(spoolId);
+
+    // Build new extra object
+    const newExtra: Record<string, string> = {};
+    if (spool.extra) {
+      for (const [key, value] of Object.entries(spool.extra)) {
+        newExtra[key] = value;
+      }
+    }
+
+    // Get existing tags and add new one if not already present
+    const existingTagsRaw = spool.extra?.['tag'];
+    let existingTags: string[] = [];
+    if (existingTagsRaw) {
+      try {
+        const parsed = JSON.parse(existingTagsRaw);
+        if (parsed && parsed !== '') {
+          // Split by comma to get array of tags
+          existingTags = parsed.split(',').map((t: string) => t.trim()).filter((t: string) => t !== '');
+        }
+      } catch {
+        // If parsing fails, treat as empty
+      }
+    }
+
+    // Only add if not already present
+    if (!existingTags.includes(tagUid)) {
+      existingTags.push(tagUid);
+    }
+
+    // Store as comma-separated string
+    newExtra['tag'] = JSON.stringify(existingTags.join(','));
+
+    return this.fetch<Spool>(`/spool/${spoolId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        extra: newExtra,
+      }),
+    });
+  }
+
+  /**
+   * Clear a tag from all spools except the specified one
+   * Used to ensure RFID tags are unique across spools
+   * Handles comma-separated tags - removes only the matching tag from the list
+   */
+  async clearDuplicateTags(tagUid: string, exceptSpoolId: number): Promise<void> {
+    const spools = await this.getSpools();
+
+    for (const spool of spools) {
+      if (spool.id === exceptSpoolId) continue;
+
+      const existingTagsRaw = spool.extra?.['tag'];
+      if (!existingTagsRaw) continue;
+
+      let existingTags: string[] = [];
+      try {
+        const parsed = JSON.parse(existingTagsRaw);
+        if (parsed && parsed !== '') {
+          existingTags = parsed.split(',').map((t: string) => t.trim()).filter((t: string) => t !== '');
+        }
+      } catch {
+        continue;
+      }
+
+      // Check if this spool has the tag we're looking for
+      if (existingTags.includes(tagUid)) {
+        // Remove only this specific tag from the list
+        const updatedTags = existingTags.filter(t => t !== tagUid);
+
+        // Build new extra object
+        const newExtra: Record<string, string> = {};
+        if (spool.extra) {
+          for (const [key, value] of Object.entries(spool.extra)) {
+            if (key !== 'tag') {
+              newExtra[key] = value;
+            }
+          }
+        }
+        newExtra['tag'] = JSON.stringify(updatedTags.length > 0 ? updatedTags.join(',') : '');
+
+        await this.fetch<Spool>(`/spool/${spool.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            extra: newExtra,
+          }),
+        });
+      }
+    }
+  }
+
+  /**
+   * Find a spool by its RFID tag
+   * Supports comma-separated tags - returns spool if ANY stored tag matches
+   */
+  async findSpoolByTag(tagUid: string): Promise<Spool | null> {
+    const spools = await this.getSpools();
+
+    for (const spool of spools) {
+      const existingTagsRaw = spool.extra?.['tag'];
+      if (!existingTagsRaw) continue;
+
+      try {
+        const parsed = JSON.parse(existingTagsRaw);
+        if (parsed && parsed !== '') {
+          const existingTags = parsed.split(',').map((t: string) => t.trim()).filter((t: string) => t !== '');
+          if (existingTags.includes(tagUid)) {
+            return spool;
+          }
+        }
+      } catch {
+        // If parsing fails, skip this spool
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -220,6 +353,7 @@ export class SpoolmanClient {
     const requiredFields = [
       { key: 'active_tray', name: 'active_tray', description: 'tray assignments' },
       { key: 'barcode', name: 'barcode', description: 'barcode/QR code scanning' },
+      { key: 'tag', name: 'tag', description: 'Bambu RFID tag UID for auto-matching' },
     ];
 
     try {
@@ -228,11 +362,7 @@ export class SpoolmanClient {
 
       for (const field of requiredFields) {
         if (!existingKeys.has(field.key)) {
-          console.log(`[SpoolmanSync] Creating ${field.key} extra field in Spoolman (for ${field.description})...`);
           await this.createSpoolExtraField(field.key, field.name, 'text');
-          console.log(`[SpoolmanSync] ${field.key} extra field created successfully`);
-        } else {
-          console.log(`[SpoolmanSync] ${field.key} extra field already exists`);
         }
       }
     } catch (error) {

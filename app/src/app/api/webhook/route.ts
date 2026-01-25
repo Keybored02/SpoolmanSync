@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { SpoolmanClient } from '@/lib/api/spoolman';
 import { spoolEvents, SPOOL_UPDATED, SpoolUpdateEvent } from '@/lib/events';
+import { createActivityLog } from '@/lib/activity-log';
 
 /**
  * Webhook endpoint for Home Assistant automations
@@ -21,18 +22,7 @@ import { spoolEvents, SPOOL_UPDATED, SpoolUpdateEvent } from '@/lib/events';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    console.log('Webhook received:', body);
-
     const { event } = body;
-
-    // Log the webhook event
-    await prisma.activityLog.create({
-      data: {
-        type: 'webhook',
-        message: `Received ${event} event`,
-        details: JSON.stringify(body),
-      },
-    });
 
     const spoolmanConnection = await prisma.spoolmanConnection.findFirst();
 
@@ -45,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     // Handle spool_usage event - deduct filament weight from spool
     if (event === 'spool_usage') {
-      const { used_weight, active_tray_id } = body;
+      const { used_weight, active_tray_id, tag_uid } = body;
 
       if (!used_weight || used_weight <= 0) {
         return NextResponse.json({ status: 'ignored', reason: 'no weight to deduct' });
@@ -75,6 +65,43 @@ export async function POST(request: NextRequest) {
 
       console.log(`Deducted ${used_weight}g from spool #${matchedSpool.id} (${matchedSpool.filament.name})`);
 
+      // Store the RFID tag if we have a valid one from the printer
+      // This enables future auto-matching when the same spool is reinserted
+      // Due to Bambu firmware bug, the same spool can report different tag_uids
+      // depending on which tray it's in, so we accumulate multiple tags per spool
+      let tagStored = false;
+      if (tag_uid && tag_uid !== 'unknown' && tag_uid !== '') {
+        // Check if this specific tag is already stored on this spool
+        const existingTagsRaw = matchedSpool.extra?.['tag'];
+        let alreadyHasThisTag = false;
+        if (existingTagsRaw) {
+          try {
+            const parsed = JSON.parse(existingTagsRaw);
+            if (parsed && parsed !== '') {
+              const existingTags = parsed.split(',').map((t: string) => t.trim());
+              alreadyHasThisTag = existingTags.includes(tag_uid);
+            }
+          } catch {
+            // If parsing fails, assume tag not stored
+          }
+        }
+
+        if (!alreadyHasThisTag) {
+          console.log(`Storing RFID tag "${tag_uid}" on spool #${matchedSpool.id}`);
+          await client.setSpoolTag(matchedSpool.id, tag_uid);
+          tagStored = true;
+
+          await createActivityLog({
+            type: 'tag_stored',
+            message: `Stored RFID tag on spool #${matchedSpool.id} (${matchedSpool.filament.name})`,
+            details: {
+              spoolId: matchedSpool.id,
+              tagUid: tag_uid,
+            },
+          });
+        }
+      }
+
       // Emit real-time update event for dashboard
       const updateEvent: SpoolUpdateEvent = {
         type: 'usage',
@@ -87,15 +114,14 @@ export async function POST(request: NextRequest) {
       };
       spoolEvents.emit(SPOOL_UPDATED, updateEvent);
 
-      await prisma.activityLog.create({
-        data: {
-          type: 'spool_usage',
-          message: `Deducted ${used_weight}g from spool #${matchedSpool.id} (${matchedSpool.filament.name})`,
-          details: JSON.stringify({
-            spoolId: matchedSpool.id,
-            usedWeight: used_weight,
-            trayId: active_tray_id,
-          }),
+      await createActivityLog({
+        type: 'spool_usage',
+        message: `Deducted ${used_weight}g from spool #${matchedSpool.id} (${matchedSpool.filament.name})`,
+        details: {
+          spoolId: matchedSpool.id,
+          usedWeight: used_weight,
+          trayId: active_tray_id,
+          tagStored,
         },
       });
 
@@ -104,44 +130,106 @@ export async function POST(request: NextRequest) {
         spoolId: matchedSpool.id,
         deducted: used_weight,
         newRemainingWeight: matchedSpool.remaining_weight - used_weight,
+        tagStored,
       });
     }
 
-    // Handle tray_change event - auto-assign spool by tag_uid
+    // Handle tray_change event - auto-assign spool by RFID tag or handle empty tray
     if (event === 'tray_change') {
-      const { tray_entity_id, tag_uid } = body;
+      const { tray_entity_id, tag_uid, name, material } = body;
       const spools = await client.getSpools();
 
-      // Auto-match by tag_uid only (if user has set tag_uid in Spoolman's extra field)
-      // We intentionally don't match by color/material as it's unreliable when users
-      // have multiple spools of the same type. Users should manually assign spools.
+      // Check if tray is now empty (no filament, or explicitly "Empty")
+      // ha-bambulab reports name="Empty" when tray has no filament
+      const trayIsEmpty = !name || name.toLowerCase() === 'empty' || name === '';
+
+      if (trayIsEmpty) {
+        // Auto-unassign any spool currently assigned to this tray
+        const jsonTrayId = JSON.stringify(tray_entity_id);
+        const assignedSpool = spools.find(s => s.extra?.['active_tray'] === jsonTrayId);
+
+        if (assignedSpool) {
+          console.log(`Tray ${tray_entity_id} is now empty, unassigning spool #${assignedSpool.id}`);
+          await client.unassignSpoolFromTray(assignedSpool.id);
+
+          // Emit real-time update event
+          const updateEvent: SpoolUpdateEvent = {
+            type: 'unassign',
+            spoolId: assignedSpool.id,
+            spoolName: assignedSpool.filament.name,
+            trayId: tray_entity_id,
+            timestamp: Date.now(),
+          };
+          spoolEvents.emit(SPOOL_UPDATED, updateEvent);
+
+          await createActivityLog({
+            type: 'spool_unassign',
+            message: `Auto-unassigned spool #${assignedSpool.id} from ${tray_entity_id} (tray empty)`,
+            details: { spoolId: assignedSpool.id, trayId: tray_entity_id, reason: 'tray_empty' },
+          });
+
+          return NextResponse.json({
+            status: 'success',
+            action: 'unassigned',
+            spoolId: assignedSpool.id,
+            reason: 'tray_empty',
+          });
+        }
+
+        return NextResponse.json({
+          status: 'ignored',
+          reason: 'tray empty and no spool was assigned',
+        });
+      }
+
+      // Tray has filament - try to auto-match by RFID tag
+      // Uses the `tag` field (stored on first spool_usage)
       if (tag_uid && tag_uid !== 'unknown' && tag_uid !== '') {
-        const jsonTagUid = JSON.stringify(tag_uid);
-        const matchedSpool = spools.find(s => s.extra?.['tag_uid'] === jsonTagUid);
+        const matchedSpool = await client.findSpoolByTag(tag_uid);
 
         if (matchedSpool) {
           await client.assignSpoolToTray(matchedSpool.id, tray_entity_id);
 
-          await prisma.activityLog.create({
-            data: {
-              type: 'spool_change',
-              message: `Auto-assigned spool #${matchedSpool.id} to ${tray_entity_id} (matched by tag UID)`,
-              details: JSON.stringify({ spoolId: matchedSpool.id, trayId: tray_entity_id, matchedBy: 'tag_uid' }),
-            },
+          // Emit real-time update event
+          const updateEvent: SpoolUpdateEvent = {
+            type: 'assign',
+            spoolId: matchedSpool.id,
+            spoolName: matchedSpool.filament.name,
+            trayId: tray_entity_id,
+            timestamp: Date.now(),
+          };
+          spoolEvents.emit(SPOOL_UPDATED, updateEvent);
+
+          await createActivityLog({
+            type: 'spool_change',
+            message: `Auto-assigned spool #${matchedSpool.id} to ${tray_entity_id} (matched by RFID tag)`,
+            details: { spoolId: matchedSpool.id, trayId: tray_entity_id, matchedBy: 'rfid_tag', tagUid: tag_uid },
           });
 
           return NextResponse.json({
             status: 'success',
             spool: matchedSpool,
-            matchedBy: 'tag_uid',
+            matchedBy: 'rfid_tag',
           });
         }
       }
 
       // No auto-match - user needs to manually assign spool
+      // Log what the printer detected for debugging
+      console.log(`Tray ${tray_entity_id} changed but no matching spool found. Printer reports: name="${name}", material="${material}", tag_uid="${tag_uid}"`);
+
+      // Emit tray_change event so dashboard can refresh and show warning banner
+      const updateEvent: SpoolUpdateEvent = {
+        type: 'tray_change',
+        trayId: tray_entity_id,
+        timestamp: Date.now(),
+      };
+      spoolEvents.emit(SPOOL_UPDATED, updateEvent);
+
       return NextResponse.json({
         status: 'no_match',
         message: 'No spool assigned to this tray. Please assign a spool manually in SpoolmanSync.',
+        printerReports: { name, material, tag_uid },
       });
     }
 
@@ -149,12 +237,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Webhook error:', error);
 
-    await prisma.activityLog.create({
-      data: {
-        type: 'error',
-        message: 'Webhook processing failed',
-        details: error instanceof Error ? error.message : String(error),
-      },
+    await createActivityLog({
+      type: 'error',
+      message: 'Webhook processing failed',
+      details: { error: error instanceof Error ? error.message : String(error) },
     });
 
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
