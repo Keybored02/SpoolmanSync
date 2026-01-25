@@ -18,6 +18,7 @@ interface PrinterWithSpools extends HAPrinter {
     trays: Array<{
       entity_id: string;
       tray_number: number;
+      name?: string; // Filament name from printer, "Empty" if no filament loaded
       assigned_spool?: Spool;
       [key: string]: unknown;
     }>;
@@ -25,6 +26,7 @@ interface PrinterWithSpools extends HAPrinter {
   external_spool?: {
     entity_id: string;
     tray_number: number;
+    name?: string;
     assigned_spool?: Spool;
     [key: string]: unknown;
   };
@@ -42,18 +44,28 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Count unassigned trays
-  const unassignedCount = useMemo(() => {
-    let count = 0;
+  // Track trays that have filament loaded but no spool assigned
+  // Returns both count and list of specific tray identifiers
+  const unassignedTrays = useMemo(() => {
+    const trays: string[] = [];
     for (const printer of printers) {
       for (const ams of printer.ams_units) {
         for (const tray of ams.trays) {
-          if (!tray.assigned_spool) count++;
+          // Check if tray has filament (name is not empty/Empty)
+          const trayName = tray.name?.toLowerCase().trim() || '';
+          const hasFilament = trayName && trayName !== 'empty';
+
+          // Only count if filament is loaded but no spool assigned
+          if (hasFilament && !tray.assigned_spool) {
+            // Format: "AMS 1 Tray 3" or just "Tray 3" if only one AMS
+            const amsPrefix = printer.ams_units.length > 1 ? `${ams.name} ` : '';
+            trays.push(`${amsPrefix}Tray ${tray.tray_number}`);
+          }
         }
       }
       // Don't count external spool as "unassigned" by default since many don't use it
     }
-    return count;
+    return trays;
   }, [printers]);
 
   const fetchData = useCallback(async () => {
@@ -115,8 +127,21 @@ export default function Dashboard() {
 
           // Refresh data when spool is updated
           if (data.type === 'usage') {
-            console.log('Spool update received:', data);
+            console.log('Spool usage received:', data);
             toast.info(`Filament used: ${data.deducted}g from ${data.spoolName || 'spool'}`);
+            fetchData();
+          } else if (data.type === 'assign') {
+            console.log('Spool assigned:', data);
+            toast.success(`Auto-assigned ${data.spoolName || 'spool'} to tray`);
+            fetchData();
+          } else if (data.type === 'unassign') {
+            console.log('Spool unassigned:', data);
+            toast.info(`Unassigned ${data.spoolName || 'spool'} from tray`);
+            fetchData();
+          } else if (data.type === 'tray_change') {
+            // Tray changed but no spool was auto-matched
+            // Refresh to show warning banner prompting user to assign
+            console.log('Tray changed (no auto-match):', data);
             fetchData();
           }
         } catch (err) {
@@ -268,7 +293,7 @@ export default function Dashboard() {
         ) : (
           <div className="space-y-6">
             {/* Show instruction banner when there are unassigned trays */}
-            {unassignedCount > 0 && (
+            {unassignedTrays.length > 0 && (
               <Alert>
                 <svg
                   className="h-4 w-4"
@@ -285,8 +310,12 @@ export default function Dashboard() {
                 </svg>
                 <AlertTitle>Assign Spools to Trays</AlertTitle>
                 <AlertDescription>
-                  You have {unassignedCount} tray{unassignedCount !== 1 ? 's' : ''} without assigned spools.
-                  Click on a tray card below to select which Spoolman spool is loaded in that slot.
+                  {unassignedTrays.length === 1 ? (
+                    <>{unassignedTrays[0]} has filament but no assigned spool.</>
+                  ) : (
+                    <>{unassignedTrays.join(', ')} have filament but no assigned spools.</>
+                  )}
+                  {' '}Click on the tray card below to select which Spoolman spool is loaded.
                   This ensures accurate filament tracking when prints complete.
                 </AlertDescription>
               </Alert>
