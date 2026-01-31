@@ -3,6 +3,8 @@
  *
  * Generates automations.yaml and configuration.yaml additions
  * for automatic spool tracking with Bambu Lab printers.
+ *
+ * Supports multiple AMS units per printer.
  */
 
 import { HAPrinter } from './api/homeassistant';
@@ -12,6 +14,16 @@ export interface GeneratedConfig {
   configurationAdditions: string;
   printerCount: number;
   trayCount: number;
+}
+
+/**
+ * Tray info extracted from printer discovery
+ */
+interface TrayInfo {
+  entityId: string;
+  amsNumber: number;  // 0 for external spool, 1+ for AMS units
+  trayNumber: number; // 0 for external, 1-4 for AMS trays
+  compositeId: number; // Encoded as amsNumber * 10 + trayNumber (0 for external, 11-14 for AMS1, 21-24 for AMS2, etc.)
 }
 
 /**
@@ -36,26 +48,42 @@ export function generateHAConfig(
   const printer = printers[0];
   const prefix = extractPrinterPrefix(printer.entity_id);
 
-  // Count total trays
-  let trayCount = 0;
-  for (const ams of printer.ams_units) {
-    trayCount += ams.trays.length;
-  }
+  // Collect all trays from all AMS units
+  const allTrays: TrayInfo[] = [];
+
+  // Add external spool first (composite ID = 0)
   if (printer.external_spool) {
-    trayCount++;
+    allTrays.push({
+      entityId: printer.external_spool.entity_id,
+      amsNumber: 0,
+      trayNumber: 0,
+      compositeId: 0,
+    });
   }
 
-  // Determine tray entity suffix (newer versions use _2)
-  const traySuffix = determineTrayEntitySuffix(printer);
+  // Add trays from all AMS units
+  for (const ams of printer.ams_units) {
+    // Extract AMS number from entity_id (e.g., sensor.xxx_ams_2_humidity -> 2)
+    const amsMatch = ams.entity_id.match(/_ams_(\d+)_/);
+    const amsNumber = amsMatch ? parseInt(amsMatch[1], 10) : 1;
 
-  // Determine external spool entity ID (if exists)
-  const externalSpoolEntityId = printer.external_spool?.entity_id || null;
+    for (const tray of ams.trays) {
+      allTrays.push({
+        entityId: tray.entity_id,
+        amsNumber,
+        trayNumber: tray.tray_number,
+        compositeId: amsNumber * 10 + tray.tray_number, // e.g., AMS2 tray 3 = 23
+      });
+    }
+  }
+
+  const trayCount = allTrays.length;
 
   // Generate the comprehensive automation
-  const automationsYaml = generateAutomationsYaml(prefix, traySuffix, webhookUrl, externalSpoolEntityId);
+  const automationsYaml = generateAutomationsYaml(prefix, allTrays, webhookUrl);
 
   // Generate configuration additions
-  const configurationAdditions = generateConfigurationAdditions(prefix, traySuffix, spoolmanUrl, externalSpoolEntityId);
+  const configurationAdditions = generateConfigurationAdditions(prefix, allTrays, spoolmanUrl);
 
   return {
     automationsYaml,
@@ -75,41 +103,48 @@ function extractPrinterPrefix(entityId: string): string {
 }
 
 /**
- * Extract the entity suffix from tray entities (e.g., _2, _3, etc.)
- * Newer ha-bambulab versions create entities with suffixes when re-added
+ * Build Jinja2 template to find active tray entity ID from composite tray number
+ * Returns the full entity ID based on the composite number
  */
-function determineTrayEntitySuffix(printer: HAPrinter): string {
-  if (printer.ams_units.length > 0 && printer.ams_units[0].trays.length > 0) {
-    const trayEntityId = printer.ams_units[0].trays[0].entity_id;
-    // Match entity suffix pattern: sensor.xxx_ams_1_tray_1_2 -> _2
-    // Pattern: ends with _tray_N or _tray_N_S where N is tray number and S is suffix
-    const match = trayEntityId.match(/_tray_\d+(_\d+)?$/);
-    if (match && match[1]) {
-      return match[1]; // Returns _2, _3, etc.
-    }
-    return ''; // No suffix
+function buildTrayEntityLookup(allTrays: TrayInfo[]): string {
+  // Build a Jinja2 conditional that maps composite ID to entity ID
+  const conditions: string[] = [];
+
+  for (const tray of allTrays) {
+    conditions.push(`{% if tray_composite == ${tray.compositeId} %}${tray.entityId}{% endif %}`);
   }
-  return '_2'; // Default to newer format
+
+  // Join with elif logic - but since Jinja doesn't have elif in this form, we use nested ifs
+  // Actually, we can output all and only one will match
+  return conditions.join('');
 }
 
 /**
- * Generate automations.yaml content based on working template
- * Supports both AMS trays (1-4) and external spool (tray 0)
+ * Generate automations.yaml content
+ * Supports multiple AMS units
  */
-function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl: string, externalSpoolEntityId: string | null): string {
-  // Build the tray_sensor variable logic - handles both AMS trays and external spool
-  const traySensorLogic = externalSpoolEntityId
-    ? `{% if tray_number == 0 %}${externalSpoolEntityId}{% else %}sensor.${prefix}_ams_1_tray_{{ tray_number }}${traySuffix}{% endif %}`
-    : `sensor.${prefix}_ams_1_tray_{{ tray_number }}${traySuffix}`;
+function generateAutomationsYaml(prefix: string, allTrays: TrayInfo[], webhookUrl: string): string {
+  // Build list of all tray entity IDs for triggers
+  const trayEntityIds = allTrays.map(t => t.entityId);
+
+  // Build the tray_sensor lookup template
+  const trayEntityLookup = buildTrayEntityLookup(allTrays);
 
   return `# =============================================================================
 # SpoolmanSync Automation: Track Spool Usage
 #
 # Auto-generated by SpoolmanSync for printer: ${prefix}
+# Supports ${allTrays.length} tray(s) across ${new Set(allTrays.map(t => t.amsNumber)).size} AMS unit(s)
 #
 # This automation tracks:
 # 1. Tray changes - when the AMS switches to a different tray (or external spool)
 # 2. Print completion - to log final filament usage
+#
+# Tray encoding: composite_id = ams_number * 10 + tray_number
+# - 0 = external spool
+# - 11-14 = AMS1 trays 1-4
+# - 21-24 = AMS2 trays 1-4
+# - etc.
 # =============================================================================
 - id: 'spoolmansync_update_spool_${prefix}'
   alias: SpoolmanSync - Update Spool
@@ -125,15 +160,14 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
       id: print_end
       trigger: state
   variables:
-    # For tray trigger: get the old tray number (what we're switching FROM)
-    # Tray 0 = external spool, Trays 1-4 = AMS trays
+    # For tray trigger: get the old tray composite ID (what we're switching FROM)
     old_tray: |-
       {% if trigger.id == 'tray' and trigger.from_state.state not in [None, '', 'unknown', 'unavailable'] %}
         {{ trigger.from_state.state | int(-1) }}
       {% else %}
         -1
       {% endif %}
-    # For tray trigger: get the new tray number (what we're switching TO)
+    # For tray trigger: get the new tray composite ID (what we're switching TO)
     new_tray: |-
       {% if trigger.id == 'tray' and trigger.to_state.state not in [None, '', 'unknown', 'unavailable'] %}
         {{ trigger.to_state.state | int(-1) }}
@@ -141,14 +175,14 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
         -1
       {% endif %}
     # For print_end: use the helper
-    tray_number: |-
+    tray_composite: |-
       {% if trigger.id == 'print_end' %}
         {{ states('input_number.spoolmansync_last_tray') | int(-1) }}
       {% else %}
         {{ old_tray }}
       {% endif %}
-    # Build sensor entity ID for the tray we're logging (0 = external spool, 1-4 = AMS)
-    tray_sensor: "${traySensorLogic}"
+    # Build sensor entity ID for the tray we're logging
+    tray_sensor: "${trayEntityLookup}"
     tray_weight: "{{ states('sensor.spoolmansync_filament_usage_meter') | float(0) | round(2) }}"
     tray_uuid: "{{ state_attr(tray_sensor, 'tray_uuid') | default('') }}"
     material: "{{ state_attr(tray_sensor, 'type') | default('') }}"
@@ -163,21 +197,23 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
             - condition: template
               value_template: "{{ trigger.id == 'tray' }}"
           sequence:
-            # Log usage from OLD tray only if:
-            # 1. old_tray was valid (>= 0 allows external spool and AMS trays)
+            # Log usage from OLD tray if:
+            # 1. old_tray was valid (>= 0)
             # 2. we have weight to log (>= 0.01g)
-            # 3. printer was actually printing (not just a spool swap while idle)
+            # 3. tray_sensor resolved to a valid entity (defense-in-depth)
+            # Note: We don't check current stage because accumulated weight on the
+            # utility meter represents real filament consumption that should be logged.
+            # This handles cancelled prints where the user unloads filament while idle.
             - choose:
                 - conditions:
                     - condition: template
-                      value_template: >-
-                        {{ old_tray >= 0 and tray_weight >= 0.01 and
-                           states('sensor.${prefix}_current_stage') in ['printing', 'prepare', 'pause'] }}
+                      value_template: "{{ old_tray >= 0 and tray_weight >= 0.01 and tray_sensor != '' }}"
                   sequence:
                     - action: system_log.write
                       data:
                         message: >-
                           SPOOLMANSYNC TRAY CHANGE | Old tray {{ old_tray }} -> New tray {{ new_tray }} |
+                          Sensor: {{ tray_sensor }} |
                           Spool: {{ name }} ({{ material }}) |
                           Weight used: {{ tray_weight }}g |
                           Spool Serial: {{ tray_uuid }}
@@ -200,8 +236,8 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                   data:
                     message: >-
                       SPOOLMANSYNC TRAY CHANGE (no usage logged) | Old: {{ old_tray }} -> New: {{ new_tray }} |
-                      Weight: {{ tray_weight }}g | Stage: {{ states('sensor.${prefix}_current_stage') }} |
-                      Reason: {{ 'old_tray invalid' if old_tray < 0 else ('not printing' if states('sensor.${prefix}_current_stage') not in ['printing', 'prepare', 'pause'] else 'no weight') }}
+                      Weight: {{ tray_weight }}g |
+                      Reason: {{ 'old_tray invalid' if old_tray < 0 else 'no weight to log' }}
                     level: debug
                 # Reset meter anyway to prevent stale values from accumulating
                 - action: utility_meter.calibrate
@@ -209,7 +245,7 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                     entity_id: sensor.spoolmansync_filament_usage_meter
                   data:
                     value: "0"
-            # ALWAYS update helper to new tray (0 = external spool, 1-4 = AMS)
+            # ALWAYS update helper to new tray composite ID
             - condition: template
               value_template: "{{ new_tray >= 0 }}"
             - action: input_number.set_value
@@ -231,16 +267,16 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                 {{ trigger.id == 'print_end'
                    and trigger.from_state.state not in ['unavailable', 'unknown', 'idle', 'finished'] }}
           sequence:
-            # tray_number >= 0 allows external spool (0) and AMS trays (1-4)
             - choose:
                 - conditions:
                     - condition: template
-                      value_template: "{{ tray_number >= 0 and tray_weight >= 0.01 }}"
+                      value_template: "{{ tray_composite >= 0 and tray_weight >= 0.01 and tray_sensor != '' }}"
                   sequence:
                     - action: system_log.write
                       data:
                         message: >-
-                          SPOOLMANSYNC PRINT END | Tray {{ tray_number }} |
+                          SPOOLMANSYNC PRINT END | Tray {{ tray_composite }} |
+                          Sensor: {{ tray_sensor }} |
                           Spool: {{ name }} ({{ material }}) |
                           Weight used: {{ tray_weight }}g |
                           Spool Serial: {{ tray_uuid }}
@@ -257,8 +293,8 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
                 - action: system_log.write
                   data:
                     message: >-
-                      SPOOLMANSYNC PRINT END (skipped) | Tray: {{ tray_number }} | Weight: {{ tray_weight }}g |
-                      Reason: {{ 'no tray in helper' if tray_number < 0 else 'no weight' }}
+                      SPOOLMANSYNC PRINT END (skipped) | Tray: {{ tray_composite }} | Weight: {{ tray_weight }}g |
+                      Reason: {{ 'no tray in helper' if tray_composite < 0 else 'no weight' }}
                     level: warning
             # Always reset meter after print
             - action: utility_meter.calibrate
@@ -284,10 +320,7 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
   triggers:
     # Trigger on any state or attribute change for tray sensors
     - entity_id:
-        - sensor.${prefix}_ams_1_tray_1${traySuffix}
-        - sensor.${prefix}_ams_1_tray_2${traySuffix}
-        - sensor.${prefix}_ams_1_tray_3${traySuffix}
-        - sensor.${prefix}_ams_1_tray_4${traySuffix}${externalSpoolEntityId ? `\n        - ${externalSpoolEntityId}` : ''}
+${trayEntityIds.map(id => `        - ${id}`).join('\n')}
       trigger: state
   conditions:
     # Only trigger if the entity is actually available
@@ -326,52 +359,84 @@ function generateAutomationsYaml(prefix: string, traySuffix: string, webhookUrl:
 }
 
 /**
- * Generate configuration.yaml additions
- * Supports both AMS trays (1-4) and external spool (tray 0)
+ * Build Jinja2 template to detect active tray from all AMS units
+ * Returns composite ID: 0 = external, 11-14 = AMS1, 21-24 = AMS2, etc.
  */
-function generateConfigurationAdditions(prefix: string, traySuffix: string, spoolmanUrl: string, externalSpoolEntityId: string | null): string {
-  // Build the active tray detection logic - handles both AMS trays and external spool
-  // Note: We check that external spool has a configured filament (name != "Empty") to prevent
-  // false positives during AMS transitions. The printer briefly reports external spool as "active"
-  // during filament runout/switch events, but with name="Empty" since nothing is configured there.
-  // Real external spool usage requires configuration in Bambu Studio first, which sets a real name.
-  const externalSpoolCheck = externalSpoolEntityId
-    ? `
-          {# Check external spool first (tray 0) - only if it has configured filament #}
-          {# Ignore empty external spool to prevent false positives during AMS transitions #}
-          {% set ext_name = state_attr('${externalSpoolEntityId}', 'name') | default('') | string | lower | trim %}
-          {% if state_attr('${externalSpoolEntityId}', 'active') in [true, 'true', 'True']
+function buildActiveTrayDetection(allTrays: TrayInfo[]): string {
+  const checks: string[] = [];
+
+  // First check external spool if present
+  const externalTray = allTrays.find(t => t.compositeId === 0);
+  if (externalTray) {
+    // External spool needs extra check - ignore if name is "Empty" to prevent false positives
+    checks.push(`
+          {# Check external spool (composite ID = 0) - only if it has configured filament #}
+          {% set ext_name = state_attr('${externalTray.entityId}', 'name') | default('') | string | lower | trim %}
+          {% if state_attr('${externalTray.entityId}', 'active') in [true, 'true', 'True']
              and ext_name not in ['empty', '', 'unknown'] %}
             0
-          {% else %}`
-    : '';
-
-  const externalSpoolCheckEnd = externalSpoolEntityId ? '{% endif %}' : '';
-
-  // Build availability check including external spool if present
-  const availabilityEntities = [
-    `'sensor.${prefix}_ams_1_tray_1${traySuffix}'`,
-    `'sensor.${prefix}_ams_1_tray_2${traySuffix}'`,
-    `'sensor.${prefix}_ams_1_tray_3${traySuffix}'`,
-    `'sensor.${prefix}_ams_1_tray_4${traySuffix}'`,
-  ];
-  if (externalSpoolEntityId) {
-    availabilityEntities.push(`'${externalSpoolEntityId}'`);
+          {% endif %}`);
   }
+
+  // Check each AMS tray explicitly using discovered entity IDs
+  // This ensures correct entity IDs including any suffixes (_2, _3, etc.)
+  const amsTrays = allTrays.filter(t => t.amsNumber > 0).sort((a, b) => a.compositeId - b.compositeId);
+
+  if (amsTrays.length > 0) {
+    // Group by AMS number for comments
+    const amsNumbers = [...new Set(amsTrays.map(t => t.amsNumber))].sort();
+
+    for (const amsNumber of amsNumbers) {
+      const traysForAms = amsTrays.filter(t => t.amsNumber === amsNumber);
+      checks.push(`
+          {# Check AMS${amsNumber} trays #}`);
+
+      for (const tray of traysForAms) {
+        checks.push(`
+          {% if state_attr('${tray.entityId}', 'active') in [true, 'true', 'True'] %}
+            ${tray.compositeId}
+          {% endif %}`);
+      }
+    }
+  }
+
+  return checks.join('');
+}
+
+/**
+ * Generate configuration.yaml additions
+ * Supports multiple AMS units
+ */
+function generateConfigurationAdditions(prefix: string, allTrays: TrayInfo[], spoolmanUrl: string): string {
+  // Build the active tray detection logic
+  const activeTrayDetection = buildActiveTrayDetection(allTrays);
+
+  // Build availability check including all tray entities
+  const availabilityEntities = allTrays.map(t => `'${t.entityId}'`);
+
+  // Calculate max value for input_number (needs to accommodate highest composite ID)
+  const maxCompositeId = Math.max(...allTrays.map(t => t.compositeId), 99);
 
   return `
 # =============================================================================
 # SpoolmanSync Configuration
 # Auto-generated for printer: ${prefix}
+# Supports ${allTrays.length} tray(s) across ${new Set(allTrays.map(t => t.amsNumber)).size} AMS unit(s)
+#
+# Tray encoding: composite_id = ams_number * 10 + tray_number
+# - 0 = external spool
+# - 11-14 = AMS1 trays 1-4
+# - 21-24 = AMS2 trays 1-4
+# - etc.
 # =============================================================================
 
 # Helper to track last active tray (captures tray when it changes)
-# 0 = external spool, 1-4 = AMS trays
+# Stores composite ID encoding AMS number and tray number
 input_number:
   spoolmansync_last_tray:
     name: "SpoolmanSync Last Tray"
     min: 0
-    max: 5
+    max: ${maxCompositeId}
     step: 1
 
 # Utility meter to track filament usage between updates
@@ -426,19 +491,11 @@ template:
         availability: >
           {{ states('sensor.${prefix}_print_weight') not in ['unknown', 'unavailable'] }}
 
-      # Detect active tray from AMS tray sensors or external spool
-      # Returns: 0 = external spool, 1-4 = AMS trays
+      # Detect active tray from all AMS tray sensors and external spool
+      # Returns composite ID: 0 = external, 11-14 = AMS1, 21-24 = AMS2, etc.
       - name: "SpoolmanSync ${prefix} Active Tray"
         unique_id: spoolmansync-${prefix}-active-tray
-        state: >${externalSpoolCheck}
-          {# Check AMS trays 1-4 #}
-          {% set trays = [1,2,3,4] %}
-          {% for tray in trays %}
-            {% set eid = 'sensor.${prefix}_ams_1_tray_' ~ tray ~ '${traySuffix}' %}
-            {% if state_attr(eid, 'active') in [true, 'true', 'True'] %}
-              {{ tray }}
-            {% endif %}
-          {% endfor %}${externalSpoolCheckEnd}
+        state: >${activeTrayDetection}
         availability: >
           {{ expand([
             ${availabilityEntities.join(',\n            ')}
