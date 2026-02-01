@@ -34,17 +34,27 @@ export const TRAY_NAMES = [
 ];
 
 // Localized names for external spool sensor
+// Note: ha-bambulab uses various formats - we support all known variations
 export const EXTERNAL_SPOOL_NAMES = [
-  'external_spool',                   // English
-  'externalspool_external_spool',     // English newer ha-bambulab format
-  'externe_spule',                    // German
-  'externespule_externe_spule',       // German newer format
-  'externe_spoel',                    // Dutch
-  'externespoel_externe_spoel',       // Dutch newer format
-  'bobina_externa',                   // Spanish
-  'bobinaexterna_bobina_externa',     // Spanish newer format
-  'bobina_esterna',                   // Italian
-  'bobinaesterna_bobina_esterna',     // Italian newer format
+  // English
+  'external_spool',                   // Older format
+  'externalspool_external_spool',     // Newer format
+  // German
+  'externe_spule',                    // Older format
+  'externalspool_externe_spule',      // Newer hybrid (English prefix + German suffix)
+  'externespule_externe_spule',       // Newer fully localized (just in case)
+  // Dutch
+  'externe_spoel',                    // Older format
+  'externalspool_externe_spoel',      // Newer hybrid
+  'externespoel_externe_spoel',       // Newer fully localized
+  // Spanish
+  'bobina_externa',                   // Older format
+  'externalspool_bobina_externa',     // Newer hybrid
+  'bobinaexterna_bobina_externa',     // Newer fully localized
+  // Italian
+  'bobina_esterna',                   // Older format
+  'externalspool_bobina_esterna',     // Newer hybrid
+  'bobinaesterna_bobina_esterna',     // Newer fully localized
   // Add more languages here:
 ];
 
