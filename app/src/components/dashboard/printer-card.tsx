@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TraySlot } from './tray-slot';
 import type { HATray } from '@/lib/api/homeassistant';
 import type { Spool } from '@/lib/api/spoolman';
-import { extractPrinterPrefix } from '@/lib/entity-patterns';
 
 interface MismatchInfo {
   type: 'material' | 'color' | 'both';
@@ -76,27 +75,27 @@ export function PrinterCard({ printer, spools, onSpoolAssign, onSpoolUnassign }:
           </div>
         ))}
 
-        {/* Always show external spool slot */}
+        {/* External spool slot - only show if discovered in HA */}
         <div className="space-y-3">
           <h4 className="text-sm font-medium text-muted-foreground">
             External Spool
           </h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <TraySlot
-              tray={printer.external_spool || {
-                // Use centralized pattern extraction for external spool fallback
-                entity_id: `sensor.${extractPrinterPrefix(printer.entity_id)}_external_spool`,
-                tray_number: 0,
-              }}
-              assignedSpool={printer.external_spool?.assigned_spool}
-              spools={spools}
-              onAssign={(spoolId) => {
-                const extEntityId = printer.external_spool?.entity_id ||
-                  `sensor.${extractPrinterPrefix(printer.entity_id)}_external_spool`;
-                onSpoolAssign(extEntityId, spoolId);
-              }}
-              onUnassign={onSpoolUnassign}
-            />
+            {printer.external_spool ? (
+              <TraySlot
+                tray={printer.external_spool}
+                assignedSpool={printer.external_spool.assigned_spool}
+                spools={spools}
+                onAssign={(spoolId) => {
+                  onSpoolAssign(printer.external_spool!.entity_id, spoolId);
+                }}
+                onUnassign={onSpoolUnassign}
+              />
+            ) : (
+              <div className="p-3 rounded-lg border border-dashed border-muted-foreground/30 text-center text-sm text-muted-foreground">
+                Not detected in Home Assistant
+              </div>
+            )}
           </div>
         </div>
       </CardContent>

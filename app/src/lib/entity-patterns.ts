@@ -58,6 +58,88 @@ export const FRIENDLY_NAME_SUFFIXES = [
   // Add more languages here:
 ];
 
+// Localized names for current_stage sensor (used in automation triggers)
+export const CURRENT_STAGE_NAMES = [
+  'current_stage',           // English
+  'aktueller_arbeitsschritt', // German
+  'huidige_fase',            // Dutch
+  'estado_actual',           // Spanish
+  'fase_corrente',           // Italian
+  // Add more languages here:
+];
+
+// Localized names for print_weight sensor
+export const PRINT_WEIGHT_NAMES = [
+  'print_weight',            // English
+  'gewicht_des_drucks',      // German
+  'gewicht_van_print',       // Dutch
+  'peso_de_la_impresion',    // Spanish
+  'grammatura_stampa',       // Italian
+  // Add more languages here:
+];
+
+// Localized names for print_progress sensor
+export const PRINT_PROGRESS_NAMES = [
+  'print_progress',          // English
+  'druckfortschritt',        // German
+  'printvoortgang',          // Dutch
+  'progreso_de_la_impresion', // Spanish
+  'progressi_di_stampa',     // Italian
+  // Add more languages here:
+];
+
+// Supported languages for entity localization
+export type SupportedLanguage = 'en' | 'de' | 'nl' | 'es' | 'it';
+
+// Mapping of print_status suffix to language code
+const PRINT_STATUS_TO_LANGUAGE: Record<string, SupportedLanguage> = {
+  'print_status': 'en',
+  'druckstatus': 'de',
+  'printstatus': 'nl',
+  'estado_de_la_impresion': 'es',
+  'stato_di_stampa': 'it',
+};
+
+// Localized entity names by language
+// These are used in the YAML generator for automation triggers
+const LOCALIZED_ENTITIES: Record<SupportedLanguage, {
+  current_stage: string;
+  print_weight: string;
+  print_progress: string;
+  external_spool: string;
+}> = {
+  en: {
+    current_stage: 'current_stage',
+    print_weight: 'print_weight',
+    print_progress: 'print_progress',
+    external_spool: 'external_spool',
+  },
+  de: {
+    current_stage: 'aktueller_arbeitsschritt',
+    print_weight: 'gewicht_des_drucks',
+    print_progress: 'druckfortschritt',
+    external_spool: 'externe_spule',
+  },
+  nl: {
+    current_stage: 'huidige_fase',
+    print_weight: 'gewicht_van_print',
+    print_progress: 'printvoortgang',
+    external_spool: 'externe_spoel',
+  },
+  es: {
+    current_stage: 'estado_actual',
+    print_weight: 'peso_de_la_impresion',
+    print_progress: 'progreso_de_la_impresion',
+    external_spool: 'bobina_externa',
+  },
+  it: {
+    current_stage: 'fase_corrente',
+    print_weight: 'grammatura_stampa',
+    print_progress: 'progressi_di_stampa',
+    external_spool: 'bobina_esterna',
+  },
+};
+
 /**
  * Build a regex pattern that matches any of the print status suffixes
  * Includes optional version suffix (_2, _3, etc.)
@@ -93,6 +175,33 @@ export function buildTrayPattern(prefix: string, amsNumber: string, trayNum: num
  */
 export function buildExternalSpoolPattern(prefix: string): RegExp {
   const names = EXTERNAL_SPOOL_NAMES.join('|');
+  return new RegExp(`^sensor\\.${prefix}_(${names})(?:_(\\d+))?$`);
+}
+
+/**
+ * Build a regex pattern for current_stage sensors
+ * @param prefix - The printer prefix
+ */
+export function buildCurrentStagePattern(prefix: string): RegExp {
+  const names = CURRENT_STAGE_NAMES.join('|');
+  return new RegExp(`^sensor\\.${prefix}_(${names})(?:_(\\d+))?$`);
+}
+
+/**
+ * Build a regex pattern for print_weight sensors
+ * @param prefix - The printer prefix
+ */
+export function buildPrintWeightPattern(prefix: string): RegExp {
+  const names = PRINT_WEIGHT_NAMES.join('|');
+  return new RegExp(`^sensor\\.${prefix}_(${names})(?:_(\\d+))?$`);
+}
+
+/**
+ * Build a regex pattern for print_progress sensors
+ * @param prefix - The printer prefix
+ */
+export function buildPrintProgressPattern(prefix: string): RegExp {
+  const names = PRINT_PROGRESS_NAMES.join('|');
   return new RegExp(`^sensor\\.${prefix}_(${names})(?:_(\\d+))?$`);
 }
 
@@ -136,4 +245,39 @@ export function cleanFriendlyName(friendlyName: string | undefined, fallback: st
     cleaned = cleaned.replace(new RegExp(` ${suffix}$`, 'i'), '');
   }
   return cleaned || fallback;
+}
+
+/**
+ * Detect the language from a printer's print_status entity ID
+ * e.g., "sensor.bambulab_p1s_druckstatus" -> "de"
+ * Returns 'en' as default if language cannot be detected
+ */
+export function detectLanguageFromEntity(entityId: string): SupportedLanguage {
+  for (const [suffix, lang] of Object.entries(PRINT_STATUS_TO_LANGUAGE)) {
+    if (entityId.endsWith(`_${suffix}`) || entityId.match(new RegExp(`_${suffix}_\\d+$`))) {
+      return lang;
+    }
+  }
+  return 'en'; // Default to English
+}
+
+/**
+ * Get localized entity names for a specific language
+ * Used by the YAML generator to create automations with correct entity IDs
+ */
+export function getLocalizedEntities(language: SupportedLanguage) {
+  return LOCALIZED_ENTITIES[language];
+}
+
+/**
+ * Get the localized entity name for a specific entity type based on printer's entity ID
+ * @param printerEntityId - The printer's print_status entity ID (used to detect language)
+ * @param entityType - The type of entity to get the localized name for
+ */
+export function getLocalizedEntityName(
+  printerEntityId: string,
+  entityType: 'current_stage' | 'print_weight' | 'print_progress' | 'external_spool'
+): string {
+  const language = detectLanguageFromEntity(printerEntityId);
+  return LOCALIZED_ENTITIES[language][entityType];
 }

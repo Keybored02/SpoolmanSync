@@ -49,6 +49,35 @@ export function generateHAConfig(
   const printer = printers[0];
   const prefix = extractPrinterPrefix(printer.entity_id);
 
+  // Use discovered entity IDs for automation generation
+  // This handles localized entity names automatically since we discover the actual IDs from HA
+  // If entities aren't found, log warnings - don't fall back to guessing names
+  const missingEntities: string[] = [];
+
+  if (!printer.current_stage_entity) {
+    missingEntities.push('current_stage');
+    console.warn(`[SpoolmanSync] Could not find current_stage entity for printer ${prefix}. Automation triggers may not work.`);
+  }
+  if (!printer.print_weight_entity) {
+    missingEntities.push('print_weight');
+    console.warn(`[SpoolmanSync] Could not find print_weight entity for printer ${prefix}. Filament usage tracking may not work.`);
+  }
+  if (!printer.print_progress_entity) {
+    missingEntities.push('print_progress');
+    console.warn(`[SpoolmanSync] Could not find print_progress entity for printer ${prefix}. Filament usage tracking may not work.`);
+  }
+
+  if (missingEntities.length > 0) {
+    console.warn(`[SpoolmanSync] Missing entities: ${missingEntities.join(', ')}. Your Home Assistant may be using a language not yet supported. Please report your entity names at https://github.com/gibz104/SpoolmanSync/issues`);
+  }
+
+  const discoveredEntities: LocalizedEntities = {
+    current_stage: printer.current_stage_entity || '',
+    print_weight: printer.print_weight_entity || '',
+    print_progress: printer.print_progress_entity || '',
+    external_spool: printer.external_spool?.entity_id || '',
+  };
+
   // Collect all trays from all AMS units
   const allTrays: TrayInfo[] = [];
 
@@ -81,10 +110,10 @@ export function generateHAConfig(
   const trayCount = allTrays.length;
 
   // Generate the comprehensive automation
-  const automationsYaml = generateAutomationsYaml(prefix, allTrays, webhookUrl);
+  const automationsYaml = generateAutomationsYaml(prefix, allTrays, webhookUrl, discoveredEntities);
 
   // Generate configuration additions
-  const configurationAdditions = generateConfigurationAdditions(prefix, allTrays, spoolmanUrl);
+  const configurationAdditions = generateConfigurationAdditions(prefix, allTrays, spoolmanUrl, discoveredEntities);
 
   return {
     automationsYaml,
@@ -112,10 +141,25 @@ function buildTrayEntityLookup(allTrays: TrayInfo[]): string {
 }
 
 /**
+ * Localized entity names type
+ */
+interface LocalizedEntities {
+  current_stage: string;
+  print_weight: string;
+  print_progress: string;
+  external_spool: string;
+}
+
+/**
  * Generate automations.yaml content
  * Supports multiple AMS units
  */
-function generateAutomationsYaml(prefix: string, allTrays: TrayInfo[], webhookUrl: string): string {
+function generateAutomationsYaml(
+  prefix: string,
+  allTrays: TrayInfo[],
+  webhookUrl: string,
+  entities: LocalizedEntities
+): string {
   // Build list of all tray entity IDs for triggers
   const trayEntityIds = allTrays.map(t => t.entityId);
 
@@ -145,7 +189,7 @@ function generateAutomationsYaml(prefix: string, allTrays: TrayInfo[], webhookUr
     - entity_id: sensor.spoolmansync_${prefix}_active_tray
       id: tray
       trigger: state
-    - entity_id: sensor.${prefix}_current_stage
+    - entity_id: ${entities.current_stage}
       to:
         - finished
         - idle
@@ -399,7 +443,12 @@ function buildActiveTrayDetection(allTrays: TrayInfo[]): string {
  * Generate configuration.yaml additions
  * Supports multiple AMS units
  */
-function generateConfigurationAdditions(prefix: string, allTrays: TrayInfo[], spoolmanUrl: string): string {
+function generateConfigurationAdditions(
+  prefix: string,
+  allTrays: TrayInfo[],
+  spoolmanUrl: string,
+  entities: LocalizedEntities
+): string {
   // Build the active tray detection logic
   const activeTrayDetection = buildActiveTrayDetection(allTrays);
 
@@ -478,10 +527,10 @@ template:
       - name: "SpoolmanSync Filament Usage"
         unique_id: spoolmansync-filament-usage
         state: >
-          {{ states('sensor.${prefix}_print_weight') | float(0) / 100 *
-             states('sensor.${prefix}_print_progress') | float(0) }}
+          {{ states('${entities.print_weight}') | float(0) / 100 *
+             states('${entities.print_progress}') | float(0) }}
         availability: >
-          {{ states('sensor.${prefix}_print_weight') not in ['unknown', 'unavailable'] }}
+          {{ states('${entities.print_weight}') not in ['unknown', 'unavailable'] }}
 
       # Detect active tray from all AMS tray sensors and external spool
       # Returns composite ID: 0 = external, 11-14 = AMS1, 21-24 = AMS2, etc.

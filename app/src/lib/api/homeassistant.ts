@@ -10,6 +10,9 @@ import {
   buildAmsPattern,
   buildTrayPattern,
   buildExternalSpoolPattern,
+  buildCurrentStagePattern,
+  buildPrintWeightPattern,
+  buildPrintProgressPattern,
   cleanFriendlyName,
 } from '@/lib/entity-patterns';
 
@@ -37,6 +40,11 @@ export interface HAPrinter {
   state: string;
   ams_units: HAAMS[];
   external_spool?: HATray;
+  // Additional entities needed for automation YAML generation
+  // These are discovered dynamically to handle localized entity names
+  current_stage_entity?: string;
+  print_weight_entity?: string;
+  print_progress_entity?: string;
 }
 
 export interface HAAMS {
@@ -567,6 +575,26 @@ export class HomeAssistantClient {
           tray_uuid: bestExt.attributes.tray_uuid as string,  // Spool serial number
           remaining_weight: bestExt.attributes.remain as number,
         };
+      }
+
+      // Discover additional entities needed for automation YAML generation
+      // These are found dynamically to handle localized entity names
+      const currentStagePattern = buildCurrentStagePattern(prefix);
+      const currentStageEntity = states.find(s => currentStagePattern.test(s.entity_id));
+      if (currentStageEntity) {
+        printer.current_stage_entity = currentStageEntity.entity_id;
+      }
+
+      const printWeightPattern = buildPrintWeightPattern(prefix);
+      const printWeightEntity = states.find(s => printWeightPattern.test(s.entity_id));
+      if (printWeightEntity) {
+        printer.print_weight_entity = printWeightEntity.entity_id;
+      }
+
+      const printProgressPattern = buildPrintProgressPattern(prefix);
+      const printProgressEntity = states.find(s => printProgressPattern.test(s.entity_id));
+      if (printProgressEntity) {
+        printer.print_progress_entity = printProgressEntity.entity_id;
       }
 
       printers.push(printer);
