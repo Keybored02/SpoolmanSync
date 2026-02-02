@@ -131,6 +131,50 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Handle print_start event - compare required weight against assigned spool remaining
+    if (event === 'print_start') {
+      const { active_tray_id, required_weight } = body;
+
+      if (!active_tray_id) {
+        return NextResponse.json({ status: 'ignored', reason: 'no active_tray_id provided' });
+      }
+
+      const spools = await client.getSpools();
+      const jsonTrayId = JSON.stringify(active_tray_id);
+      const matchedSpool = spools.find(s => s.extra?.['active_tray'] === jsonTrayId);
+
+      if (!matchedSpool) {
+        return NextResponse.json({ status: 'no_match', message: `No spool assigned to tray ${active_tray_id}` });
+      }
+
+      const remaining = matchedSpool.remaining_weight ?? 0;
+      const required = typeof required_weight === 'number' ? required_weight : parseFloat(String(required_weight));
+
+      if (!isNaN(required) && required > remaining) {
+        // Emit warning event for UI
+        const warningEvent = {
+          type: 'print_warning',
+          trayId: active_tray_id,
+          spoolId: matchedSpool.id,
+          spoolName: matchedSpool.filament.name,
+          requiredWeight: required,
+          remainingWeight: remaining,
+          timestamp: Date.now(),
+        };
+        spoolEvents.emit(SPOOL_UPDATED, warningEvent as unknown as SpoolUpdateEvent);
+
+        await createActivityLog({
+          type: 'low_filament_warning',
+          message: `Print requires ${required.toFixed(2)}g but spool #${matchedSpool.id} has ${Math.round(remaining)}g remaining`,
+          details: { spoolId: matchedSpool.id, trayId: active_tray_id, required, remaining },
+        });
+
+        return NextResponse.json({ status: 'warning_sent', spoolId: matchedSpool.id, required, remaining });
+      }
+
+      return NextResponse.json({ status: 'ok', message: 'Sufficient filament available' });
+    }
+
     // Handle tray_change event - auto-assign spool by serial number or handle empty tray
     if (event === 'tray_change') {
       const { tray_entity_id, tray_uuid, name, material } = body;

@@ -43,6 +43,12 @@ export default function Dashboard() {
   const [spools, setSpools] = useState<Spool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<Record<string, {
+    trayId: string;
+    spoolName?: string;
+    requiredWeight: number;
+    remainingWeight: number;
+  }>>({});
 
   // Track trays that have filament loaded but no spool assigned
   // Returns both count and list of specific tray identifiers
@@ -143,6 +149,18 @@ export default function Dashboard() {
             // Refresh to show warning banner prompting user to assign
             console.log('Tray changed (no auto-match):', data);
             fetchData();
+          } else if (data.type === 'print_warning') {
+            // Warning: required filament exceeds remaining on the assigned spool
+            console.log('Print start warning:', data);
+            setWarnings(prev => ({
+              ...prev,
+              [data.trayId]: {
+                trayId: data.trayId,
+                spoolName: data.spoolName,
+                requiredWeight: data.requiredWeight,
+                remainingWeight: data.remainingWeight,
+              },
+            }));
           }
         } catch (err) {
           console.error('Error parsing SSE message:', err);
@@ -280,6 +298,47 @@ export default function Dashboard() {
             Refresh
           </Button>
         </div>
+
+        {/* Print start warnings */}
+        {Object.values(warnings).length > 0 && (
+          <div className="space-y-2 mb-4">
+            {Object.values(warnings).map((w) => (
+              <Alert key={w.trayId}>
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <AlertTitle>Insufficient filament for the print</AlertTitle>
+                <AlertDescription>
+                  {w.spoolName ? `${w.spoolName}` : 'Assigned spool'} has {Math.round(w.remainingWeight)}g remaining, but the print requires {Math.round(w.requiredWeight)}g.
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-2"
+                    onClick={() => {
+                      setWarnings(prev => {
+                        const next = { ...prev };
+                        delete next[w.trayId];
+                        return next;
+                      });
+                    }}
+                  >
+                    Dismiss
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ))}
+          </div>
+        )}
 
         {printers.length === 0 ? (
           <Card>

@@ -189,6 +189,18 @@ function generateAutomationsYaml(
     - entity_id: sensor.spoolmansync_${prefix}_active_tray
       id: tray
       trigger: state
+    # Detect print start by current stage transitions
+    - entity_id: ${entities.current_stage}
+      from:
+        - idle
+        - finished
+      id: print_start
+      trigger: state
+    # Fallback: detect print start when progress goes above 0
+    - platform: numeric_state
+      entity_id: ${entities.print_progress}
+      above: 0
+      id: print_start_progress
     - entity_id: ${entities.current_stage}
       to:
         - finished
@@ -214,6 +226,8 @@ function generateAutomationsYaml(
     tray_composite: |-
       {% if trigger.id == 'print_end' %}
         {{ states('input_number.spoolmansync_last_tray') | int(-1) }}
+      {% elif trigger.id in ['print_start','print_start_progress'] %}
+        {{ states('sensor.spoolmansync_${prefix}_active_tray') | int(-1) }}
       {% else %}
         {{ old_tray }}
       {% endif %}
@@ -224,6 +238,8 @@ function generateAutomationsYaml(
     material: "{{ state_attr(tray_sensor, 'type') | default('') }}"
     name: "{{ state_attr(tray_sensor, 'name') | default('') }}"
     color: "{{ state_attr(tray_sensor, 'color') | default('') }}"
+    # Total estimated filament for the print (grams)
+    print_weight: "{{ states('${entities.print_weight}') | float(0) }}"
   actions:
     - choose:
         # =====================================================================
@@ -293,6 +309,26 @@ function generateAutomationsYaml(
               data:
                 message: "SPOOLMANSYNC HELPER UPDATED | input_number.spoolmansync_last_tray -> {{ new_tray }}"
                 level: info
+
+        # =====================================================================
+        # PRINT START - Check available filament vs required
+        # =====================================================================
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ trigger.id in ['print_start','print_start_progress'] and tray_composite >= 0 and tray_sensor != '' }}
+          sequence:
+            - action: system_log.write
+              data:
+                message: >-
+                  SPOOLMANSYNC PRINT START | Tray {{ tray_composite }} |
+                  Sensor: {{ tray_sensor }} |
+                  Required: {{ print_weight | round(2) }}g
+                level: info
+            - action: rest_command.spoolmansync_print_start
+              data:
+                filament_active_tray_id: "{{ tray_sensor }}"
+                required_weight: "{{ print_weight | round(2) }}"
 
         # =====================================================================
         # PRINT END - Log final tray usage from helper
@@ -518,6 +554,18 @@ rest_command:
         "name": "{{ name }}",
         "material": "{{ material }}",
         "color": "{{ color }}"
+      }
+
+  spoolmansync_print_start:
+    url: "${spoolmanUrl}"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: >
+      {
+        "event": "print_start",
+        "active_tray_id": "{{ filament_active_tray_id }}",
+        "required_weight": {{ required_weight | round(2) }}
       }
 
 # Template sensors for filament tracking
